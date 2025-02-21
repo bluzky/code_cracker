@@ -114,7 +114,7 @@ defmodule Cracker.MermaidGenerator do
           "#{callee_func}/#{callee_arity}"
         else
           # External call - full module path
-          "#{format_module_name(callee_module)}\\n#{callee_func}/#{callee_arity}"
+          "#{format_module_name(callee_module)}.#{callee_func}/#{callee_arity}"
         end
 
       "      #{node}[\"#{label}\"]\n"
