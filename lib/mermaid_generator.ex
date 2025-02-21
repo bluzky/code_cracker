@@ -24,17 +24,36 @@ defmodule Cracker.MermaidGenerator do
     # Group by caller
     grouped_edges = group_by_caller(structured_edges)
 
-    # Group by module
-    module_grouped_edges = group_by_module(grouped_edges)
+    # Group by module and create module IDs
+    {module_grouped_edges, module_ids} = edges
+    |> Enum.flat_map(fn {from, to} -> [from, to] end)
+    |> Enum.map(&parse_function/1)
+    |> Enum.map(&elem(&1, 0))
+    |> Enum.uniq()
+    |> Enum.map(&{&1, "m#{System.unique_integer([:positive])}"})
+    |> then(fn module_ids ->
+      {
+        Enum.group_by(grouped_edges, fn {{module, _, _}, _} -> module end),
+        Map.new(module_ids)
+      }
+    end)
+
+    # Create function IDs
+    function_ids = edges
+    |> Enum.flat_map(fn {from, to} -> [from, to] end)
+    |> Enum.map(&parse_function/1)
+    |> Enum.uniq()
+    |> Enum.map(fn {m, f, a} -> {"#{m}.#{f}/#{a}", "f#{System.unique_integer([:positive])}"} end)
+    |> Map.new()
 
     IO.iodata_to_binary([
       "flowchart LR\n",
       "  %% Function call graph\n",
-      generate_caller_nodes(grouped_edges),
+      generate_caller_nodes(grouped_edges, function_ids),
       "\n",
-      generate_module_subgraphs(module_grouped_edges),
+      generate_module_subgraphs(module_grouped_edges, module_ids, function_ids),
       "\n  %% External connections\n",
-      generate_connections(grouped_edges)
+      generate_connections(grouped_edges, module_ids, function_ids)
     ])
   end
 
@@ -54,11 +73,7 @@ defmodule Cracker.MermaidGenerator do
     Enum.group_by(edges, &elem(&1, 0))
   end
 
-  defp group_by_module(grouped_edges) do
-    Enum.group_by(grouped_edges, fn {{module, _func, _arity}, _callees} -> module end)
-  end
-
-  defp generate_caller_nodes(grouped_edges) do
+  defp generate_caller_nodes(grouped_edges, function_ids) do
     # Find all functions that are called by others
     called_functions =
       grouped_edges
@@ -70,88 +85,65 @@ defmodule Cracker.MermaidGenerator do
     grouped_edges
     |> Enum.filter(fn {caller, _callees} -> not MapSet.member?(called_functions, caller) end)
     |> Enum.map(fn {{module, func, arity}, _callees} ->
-      "  #{node_id(module, func, arity)}[\"#{module}.#{func}/#{arity}\"]\n"
+      func_id = function_ids["#{module}.#{func}/#{arity}"]
+      "  #{func_id}[\"#{module}.#{func}/#{arity}\"]\n"
     end)
   end
 
-  defp generate_module_subgraphs(module_grouped_edges) do
-    Enum.map(module_grouped_edges, fn {module, edges} ->
-      module_container = module_container_id(module)
-
+  defp generate_module_subgraphs(module_grouped_edges, module_ids, function_ids) do
+    module_grouped_edges
+    |> Enum.map(fn {module, edges} ->
+      module_id = module_ids[module]
       [
-        "  subgraph #{module_container}[\"#{module}\"]\n",
-        "  style #{module_container} stroke-dasharray: 5 5\n",
-        generate_function_subgraphs(edges),
+        "  subgraph #{module_id}[\"#{module}\"]\n",
+        "  style #{module_id} stroke-dasharray: 5 5\n",
+        generate_function_subgraphs(edges, module, function_ids),
         "  end\n"
       ]
     end)
   end
 
-  defp generate_function_subgraphs(grouped_edges) do
-    Enum.map(grouped_edges, fn {{caller_module, caller_func, caller_arity}, callees} ->
-      container_name = container_id(caller_module, caller_func, caller_arity)
-
+  defp generate_function_subgraphs(grouped_edges, current_module, function_ids) do
+    Enum.map(grouped_edges, fn {{_caller_module, caller_func, caller_arity}, callees} ->
+      func_id = function_ids["#{current_module}.#{caller_func}/#{caller_arity}"]
       [
-        "    subgraph #{container_name}[\"#{caller_func}/#{caller_arity}\"]\n",
+        "    subgraph #{func_id}_box[\"#{caller_func}/#{caller_arity}\"]\n",
         # Generate all nodes
-        generate_callee_nodes(caller_module, caller_func, caller_arity, callees),
+        generate_callee_nodes(current_module, callees, func_id, function_ids),
         # Generate internal connections
-        generate_callee_connections(caller_module, caller_func, caller_arity, callees),
+        generate_callee_connections(callees, func_id, function_ids),
         "    end\n"
       ]
     end)
   end
 
-  defp generate_callee_nodes(caller_module, caller_func, caller_arity, callees) do
+  defp generate_callee_nodes(caller_module, callees, container_id, function_ids) do
     callees
     |> Enum.with_index()
     |> Enum.map(fn {{_caller, {callee_module, callee_func, callee_arity}}, _idx} ->
-      node = container_scoped_node_id(caller_module, caller_func, caller_arity, callee_module, callee_func, callee_arity)
-
-      label =
-        if callee_module == caller_module do
-          # Internal call - simplified label
-          "#{callee_func}/#{callee_arity}"
-        else
-          # External call - full module path
-          "#{format_module_name(callee_module)}.#{callee_func}/#{callee_arity}"
-        end
-
-      "      #{node}[\"#{label}\"]\n"
+      func_str = "#{callee_module}.#{callee_func}/#{callee_arity}"
+      func_id = "#{container_id}_box_#{function_ids[func_str]}"
+      label = if callee_module == caller_module do
+        "#{callee_func}/#{callee_arity}"
+      else
+        "#{callee_module}.#{callee_func}/#{callee_arity}"
+      end
+      "      #{func_id}[\"#{label}\"]\n"
     end)
   end
 
-  defp generate_callee_connections(caller_module, caller_func, caller_arity, callees) do
+  defp generate_callee_connections(callees, container_id, function_ids) do
     callees
     |> Enum.with_index()
-    # Get pairs of consecutive functions
     |> Enum.chunk_every(2, 1, :discard)
     |> Enum.map(fn [{{_caller1, callee1}, _idx1}, {{_caller2, callee2}, _idx2}] ->
-      source =
-        container_scoped_node_id(
-          caller_module,
-          caller_func,
-          caller_arity,
-          elem(callee1, 0),
-          elem(callee1, 1),
-          elem(callee1, 2)
-        )
-
-      target =
-        container_scoped_node_id(
-          caller_module,
-          caller_func,
-          caller_arity,
-          elem(callee2, 0),
-          elem(callee2, 1),
-          elem(callee2, 2)
-        )
-
+      source = "#{container_id}_box_#{function_ids["#{elem(callee1, 0)}.#{elem(callee1, 1)}/#{elem(callee1, 2)}"]}"
+      target = "#{container_id}_box_#{function_ids["#{elem(callee2, 0)}.#{elem(callee2, 1)}/#{elem(callee2, 2)}"]}"
       "      #{source} --> #{target}\n"
     end)
   end
 
-  defp generate_connections(grouped_edges) do
+  defp generate_connections(grouped_edges, module_ids, function_ids) do
     # Find all functions that are called by others
     called_functions =
       grouped_edges
@@ -161,14 +153,15 @@ defmodule Cracker.MermaidGenerator do
       |> MapSet.new()
 
     Enum.flat_map(grouped_edges, fn {{caller_module, caller_func, caller_arity} = caller, callees} ->
-      caller_node = node_id(caller_module, caller_func, caller_arity)
+      caller_str = "#{caller_module}.#{caller_func}/#{caller_arity}"
+      caller_id = function_ids[caller_str]
 
       # Only create container connection if this function isn't called by others
       container_connection =
         if MapSet.member?(called_functions, caller) do
           []
         else
-          ["  #{caller_node} --> #{module_container_id(caller_module)}\n"]
+          ["  #{caller_id} --> #{module_ids[caller_module]}\n"]
         end
 
       # Connections to other containers
@@ -179,46 +172,20 @@ defmodule Cracker.MermaidGenerator do
           Enum.any?(grouped_edges, fn {key, _} -> key == callee end)
         end)
         |> Enum.map(fn {_caller, {callee_module, callee_func, callee_arity}} ->
-          source_node =
-            container_scoped_node_id(
-              caller_module,
-              caller_func,
-              caller_arity,
-              callee_module,
-              callee_func,
-              callee_arity
-            )
+          callee_str = "#{callee_module}.#{callee_func}/#{callee_arity}"
+          callee_id = function_ids[callee_str]
+          source = "#{caller_id}_box_#{callee_id}"
 
           if callee_module == caller_module && callee_func == caller_func && callee_arity == caller_arity do
             # Self-referential connection within the same container
-            "  #{source_node} --> #{source_node}\n"
+            "  #{source} --> #{source}\n"
           else
-            target_container = container_id(callee_module, callee_func, callee_arity)
-            "  #{source_node} -.-> #{target_container}\n"
+            target = "#{callee_id}_box"
+            "  #{source} -.-> #{target}\n"
           end
         end)
 
       container_connection ++ external_connections
     end)
-  end
-
-  defp node_id(module, function, arity) do
-    "#{String.replace(module, ".", "_")}_#{function}_#{arity}"
-  end
-
-  defp container_id(module, function, arity) do
-    "#{node_id(module, function, arity)}_container"
-  end
-
-  defp module_container_id(module) do
-    "#{String.replace(module, ".", "_")}_container"
-  end
-
-  defp container_scoped_node_id(container_module, container_func, container_arity, module, function, arity) do
-    "#{container_id(container_module, container_func, container_arity)}_#{node_id(module, function, arity)}"
-  end
-
-  defp format_module_name(module) do
-    module
   end
 end
