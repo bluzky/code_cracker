@@ -60,7 +60,7 @@ defmodule Mix.Tasks.Cracker do
     {:error, "Expected exactly one argument: ModuleName.function_name/arity"}
   end
 
-  defp parse_mfa(mfa_string) do
+  def parse_mfa(mfa_string) do
     # Remove quotes if present
     mfa_string = String.trim(mfa_string, "\"")
 
@@ -77,7 +77,8 @@ defmodule Mix.Tasks.Cracker do
              {:ok, arity} <- parse_arity(arity) do
           {:ok, {module, function, arity}}
         else
-          :error -> :error
+          {:error, _reason} ->
+            :error
         end
       _ ->
         :error
@@ -89,23 +90,23 @@ defmodule Mix.Tasks.Cracker do
       module = Module.concat(module_parts)
       {:ok, module}
     rescue
-      _ -> :error
+      _ -> {:error, "bad module"}
     end
   end
 
   defp parse_function(function_name) do
     try do
-      function = String.to_existing_atom(function_name)
+      function = String.to_atom(function_name)
       {:ok, function}
     rescue
-      _ -> :error
+      _ -> {:error, "function not exist"}
     end
   end
 
   defp parse_arity(arity_string) do
     case Integer.parse(arity_string) do
       {arity, ""} when arity >= 0 -> {:ok, arity}
-      _ -> :error
+      _ -> {:error, "bad arity"}
     end
   end
 
