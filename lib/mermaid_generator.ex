@@ -162,7 +162,6 @@ defmodule Cracker.MermaidGenerator do
 
     Enum.flat_map(grouped_edges, fn {{caller_module, caller_func, caller_arity} = caller, callees} ->
       caller_node = node_id(caller_module, caller_func, caller_arity)
-      caller_container = container_id(caller_module, caller_func, caller_arity)
 
       # Only create container connection if this function isn't called by others
       container_connection =

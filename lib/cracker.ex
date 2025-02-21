@@ -5,7 +5,7 @@ defmodule Cracker do
   Uses automatic ETS caching that cleans up after analysis.
 
   # Example usage
-defmodule Example do
+  defmodule Example do
   @moduledoc false
   def run do
     # First verify ripgrep is installed
@@ -45,7 +45,7 @@ defmodule Example do
     Port.command(port, text)
     Port.close(port)
   end
-end
+  end
 
   """
 

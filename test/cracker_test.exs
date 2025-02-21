@@ -1,5 +1,6 @@
 defmodule CrackerTest do
   use ExUnit.Case
+
   doctest Cracker
 
   test "greets the world" do
