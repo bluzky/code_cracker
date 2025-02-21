@@ -49,11 +49,10 @@ defmodule Cracker do
 
   """
 
-  alias __MODULE__.Analyzer
-  alias __MODULE__.Cache
+  alias Cracker.Analyzer
+  alias Cracker.Cache
 
   @default_opts [
-    project_dir: ".",
     ignore_modules: [],
     line: nil
   ]
