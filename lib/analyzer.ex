@@ -98,6 +98,19 @@ defmodule Cracker.Analyzer do
     {node, %{state | calls: [{actual_module, function, arity} | state.calls]}}
   end
 
+# function call in a pipe
+    defp pre_traverse(
+         {:|>, meta,[node, {{:., _, [{:__aliases__, _, module_parts}, function]}, _, args}]},
+         %{in_target_function: true} = state
+       ) do
+    actual_module = resolve_module(module_parts, state.aliases)
+      arity = length(args) + 1
+
+      # remove the last call from the list then it wont match above pattern
+    {{:done, meta, [node]}, %{state | calls: [{actual_module, function, arity} | state.calls]}}
+  end
+
+
   # dynamic module name call
   defp pre_traverse({{:., _, [{dynamic, _, _}, function]}, meta, args} = node, %{in_target_function: true} = state)
        when is_atom(dynamic) do
@@ -110,6 +123,14 @@ defmodule Cracker.Analyzer do
     else
       {node, %{state | calls: [{actual_module, function, arity} | state.calls]}}
     end
+  end
+
+  # handle call module function in pipe
+  defp pre_traverse({:|>, _, [_, {function, _, args}]} = node, %{in_target_function: true} = state)
+       when is_atom(function) and is_list(args) do
+    # pass down to below function
+    {_, state} = pre_traverse({function, nil, [:placeholder, args]}, state)
+    {node, state}
   end
 
   defp pre_traverse({function, _, args} = node, %{in_target_function: true, current_module: current_module} = state)
