@@ -69,9 +69,6 @@ defmodule Mix.Tasks.Cracker do
         module_parts = Enum.take(parts, length(parts) - 2)
         [function_name, arity] = Enum.take(parts, -2)
 
-        # Ensure module parts are capitalized
-        module_parts = Enum.map(module_parts, &String.capitalize/1)
-
         with {:ok, module} <- parse_module(module_parts),
              {:ok, function} <- parse_function(function_name),
              {:ok, arity} <- parse_arity(arity) do
